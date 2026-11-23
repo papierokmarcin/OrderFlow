@@ -5,6 +5,7 @@ from products import format_price
 from storage import load_json, save_json
 from time_utils import get_current_datetime
 from validation import require_choice, validate_order_items
+from datetime import datetime, timedelta
 
 
 ORDERS_FILE = "orders.json"
@@ -19,7 +20,12 @@ KNOWN_ORDER_STATUSES = [
 MANAGEABLE_ORDER_STATUSES = ["NEW", "PAID", "PROCESSING", "SHIPPED", "DELIVERED"]
 PAYMENT_METHODS = ["CARD", "TRANSFER", "CASH_ON_DELIVERY"]
 DELIVERY_METHODS = ["COURIER", "PARCEL_LOCKER", "PICKUP_POINT", "STORE_PICKUP"]
-
+CANCELLATION_TIME_LIMITS = {
+   "PAID": timedelta(minutes=30),
+   "PROCESSING": timedelta(minutes=15),
+}
+PAID_CANCELLABLE_STATUSES = {"PAID", "PROCESSING"}
+REFUND_PAYMENT_METHODS = {"CARD", "TRANSFER"}
 
 def load_orders():
     """Wczytuje wszystkie zamówienia."""
@@ -213,3 +219,74 @@ def format_order_report(report):
 def display_order_report(orders):
     """Wyświetla podstawowy raport zamówień."""
     print(format_order_report(build_order_report(orders)))
+
+
+def validate_order_cancellation(order, current_time=None):
+    """Sprawdza, czy zamówienie może zostać anulowane zgodnie z regułami biznesowymi."""
+    status = order.get("status")
+
+    if status == "NEW":
+        return
+
+    if status == "CANCELLED":
+        raise ValueError("Zamówienie zostało już wcześniej anulowane.")
+
+    if status == "SHIPPED":
+        raise ValueError(
+            "Nie można anulować zamówienia przekazanego już do dostawy (SHIPPED)."
+        )
+
+    if status == "DELIVERED":
+        raise ValueError(
+            "Nie można anulować dostarczonego zamówienia (DELIVERED). "
+            "Skorzystaj z procesu zwrotu."
+        )
+
+    if status not in CANCELLATION_TIME_LIMITS:
+        raise ValueError(
+            f"Anulowanie zamówienia o statusie {status} nie jest dozwolone."
+        )
+
+    try:
+        created_at = datetime.fromisoformat(order["created_at"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            "Zamówienie posiada nieprawidłową datę utworzenia."
+        ) from error
+
+    now = current_time if current_time is not None else get_current_datetime()
+    elapsed = now - created_at
+    limit = CANCELLATION_TIME_LIMITS[status]
+
+    if elapsed > limit:
+        minutes = int(limit.total_seconds() // 60)
+        raise ValueError(
+            f"Minął limit czasu na anulowanie zamówienia w statusie {status} "
+            f"(maksymalnie {minutes} min od utworzenia)."
+        )
+
+
+def requires_manual_refund(previous_status, payment_method):
+    """Zwraca True, jeśli po anulowaniu potrzebny jest ręczny zwrot środków."""
+    return (
+        previous_status in PAID_CANCELLABLE_STATUSES
+        and payment_method in REFUND_PAYMENT_METHODS
+    )
+
+
+def cancel_order(order, current_time=None):
+    """Waliduje i anuluje zamówienie bez usuwania jego danych historycznych."""
+    validate_order_cancellation(order, current_time=current_time)
+
+    previous_status = order["status"]
+    order["status"] = "CANCELLED"
+
+    return {
+        "order_id": order["id"],
+        "previous_status": previous_status,
+        "new_status": order["status"],
+        "requires_manual_refund": requires_manual_refund(
+            previous_status, order.get("payment_method")
+        ),
+    }
+      
