@@ -15,6 +15,8 @@ from orders import (
     find_order_by_id,
     load_orders,
     save_orders,
+    cancel_order,
+    validate_order_cancellation,
 )
 from products import (
     display_products,
@@ -36,6 +38,7 @@ def show_menu():
     print("3. Utwórz zamówienie")
     print("4. Zmień status zamówienia")
     print("5. Raport zamówień")
+    print("6. Anuluj zamówienie")
     print("0. Zakończ")
     print("-" * 44)
 
@@ -213,6 +216,48 @@ def handle_status_change():
     save_orders(orders)
     print(f'Status zamówienia {order["id"]} zmieniono na {new_status}.\n')
 
+def handle_order_cancellation():
+    """Obsługuje proces kontrolowanego anulowania zamówienia w menu CLI."""
+    print("\n--- Anulowanie zamówienia ---")
+    order_id = input("Podaj ID zamówienia (np. ORD-0001): ").strip().upper()
+
+    if not is_valid_identifier(order_id, "ORD"):
+        print("Błąd: nieprawidłowy format identyfikatora (wymagany format: ORD-0001).")
+        return
+
+    orders = load_orders()
+    order = find_order_by_id(orders, order_id)
+    if order is None:
+        print(f"Nie znaleziono zamówienia o ID {order_id}.")
+        return
+
+    try:
+        validate_order_cancellation(order)
+    except ValueError as error:
+        print(f"Nie można anulować zamówienia: {error}")
+        return
+
+    print(
+        f"Zamówienie {order['id']} | Status: {order['status']} | "
+        f"Płatność: {order['payment_method']} | Wartość: {order['total']:.2f} zł"
+    )
+    confirmation = input(
+        "Czy na pewno chcesz anulować to zamówienie? (T/N): "
+    ).strip().upper()
+
+    if confirmation not in {"T", "TAK"}:
+        print("Anulowanie zamówienia zostało przerwane.")
+        return
+
+    result = cancel_order(order)
+    save_orders(orders)
+    print(f"Zamówienie {result['order_id']} zostało anulowane (status: CANCELLED).")
+
+    if result["requires_manual_refund"]:
+        print(
+            "UWAGA: Zamówienie było opłacone (CARD/TRANSFER). "
+            "Wymagany jest ręczny zwrot środków poza systemem OrderFlow."
+        )
 
 def handle_order_report():
     """Obsługuje wyświetlenie podsumowania zamówień."""
@@ -228,6 +273,7 @@ def main():
         "3": handle_order_creation,
         "4": handle_status_change,
         "5": handle_order_report,
+        "6": handle_order_cancellation,
     }
 
     while True:
